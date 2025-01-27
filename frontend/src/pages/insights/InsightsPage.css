@@ -1,0 +1,128 @@
+/* General Styles */
+body {
+    font-family: "Arial", sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #171a3b; /* Dark background */
+    color: white;
+  }
+  
+  .insights-page {
+    padding: 20px;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+  
+  /* Article Header */
+  .article-header {
+    margin-bottom: 20px;
+    text-align: center;
+  }
+  
+  .article-header h1 {
+    font-size: 2rem;
+    margin-bottom: 10px;
+  }
+  
+  .article-header a {
+    font-size: 1rem;
+    color: #4cafef;
+    text-decoration: none;
+  }
+  
+  .article-header a:hover {
+    text-decoration: underline;
+  }
+  
+  /* Article Description */
+  .article-description {
+    margin-bottom: 30px;
+  }
+  
+  .article-description h2 {
+    font-size: 1.5rem;
+    margin-bottom: 10px;
+  }
+  
+  .article-description p {
+    font-size: 1rem;
+    line-height: 1.6;
+  }
+  
+  /* Key Entities Section */
+  .key-entities {
+    margin-bottom: 30px;
+  }
+  
+  .key-entities h2 {
+    font-size: 1.5rem;
+    margin-bottom: 10px;
+  }
+  
+  .entities-list {
+    display: flex;
+    gap: 10px;
+  }
+  
+  .entity {
+    background-color: #282c56; /* Subtle contrast */
+    padding: 10px 20px;
+    border-radius: 5px;
+    color: white;
+    font-size: 1rem;
+  }
+  
+  /* Visualization Section */
+  .visualization {
+    margin-bottom: 30px;
+  }
+  
+  .visualization h2 {
+    font-size: 1.5rem;
+    margin-bottom: 10px;
+  }
+  
+  .visualization-placeholder {
+    background-color: #282c56;
+    padding: 50px;
+    text-align: center;
+    border-radius: 5px;
+  }
+  
+  /* Related Articles Section */
+  .related-articles {
+    margin-bottom: 30px;
+  }
+  
+  .related-articles h2 {
+    font-size: 1.5rem;
+    margin-bottom: 10px;
+  }
+  
+  .related-article {
+    background-color: #282c56;
+    padding: 15px;
+    border-radius: 5px;
+    margin-bottom: 15px;
+  }
+  
+  .related-article h3 {
+    font-size: 1.2rem;
+    margin-bottom: 5px;
+  }
+  
+  .related-article a {
+    font-size: 1rem;
+    color: #4cafef;
+    text-decoration: none;
+  }
+  
+  .related-article a:hover {
+    text-decoration: underline;
+  }
+  
+  .related-article p {
+    font-size: 1rem;
+    line-height: 1.6;
+  }
+  
