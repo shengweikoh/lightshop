@@ -4,6 +4,7 @@ import pandas as pd
 from werkzeug.utils import secure_filename
 from sentence_transformers import SentenceTransformer, util
 import os
+import json
 import io
 import numpy as np
 import spacy
@@ -21,13 +22,16 @@ CORS(app)  # Allow frontend access
 # Set upload folders
 DATA_FOLDER = os.path.join(os.getcwd(), "data/")
 ENCODED_FOLDER = os.path.join(os.getcwd(), "encoded_data/")
+MODELS_FOLDER = os.path.join(os.getcwd(), "models/")
 
 app.config["UPLOAD_FOLDER"] = DATA_FOLDER
 app.config["ENCODED_FOLDER"] = ENCODED_FOLDER
+app.config["MODELS_FOLDER"] = MODELS_FOLDER
 
 # Ensure directories exist
 os.makedirs(DATA_FOLDER, exist_ok=True)
 os.makedirs(ENCODED_FOLDER, exist_ok=True)
+os.makedirs(MODELS_FOLDER, exist_ok=True)
 
 # Load Sentence Transformer Model
 model = SentenceTransformer("all-MiniLM-L6-v2")  # Modify model if needed
@@ -55,7 +59,6 @@ def upload_dataset():
 def read_dataset():
     # Get the dataset path from the request
     dataset_path = "".join([DATA_FOLDER, request.args.get("dataset_path")])
-    print(dataset_path)
 
     if not dataset_path or not os.path.exists(dataset_path):
         return jsonify({"error": "Invalid or missing file path"}), 400
@@ -101,7 +104,61 @@ def find_optimal_clusters_hierarchical():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/make-clusters", methods=["POST"])
+def make_clusters():
+    dataset_path = "".join([DATA_FOLDER, request.args.get("dataset_path")])
+    if not dataset_path or not os.path.exists(dataset_path):
+        return jsonify({"error": "Invalid or missing file path"}), 400
 
+    encoded_filename = os.path.basename(request.args.get("dataset_path")).replace(".xlsx", "_encoded.npy")
+    encoded_path = os.path.join(app.config["ENCODED_FOLDER"], encoded_filename)
+    if not encoded_path or not os.path.exists(encoded_path):
+        return jsonify({"error": "Invalid or missing file path"}), 400
+
+    n_clusters = int(request.args.get("n_clusters"))
+    if not n_clusters:
+        return jsonify({"error": "Invalid or missing cluster number"}), 400
+
+    try:
+        df = pd.read_excel(dataset_path)
+        embeddings = np.load(encoded_path)
+        cluster_labels = hierarchical_clustering(embeddings, n_clusters=n_clusters)
+
+        clusters = {i: [] for i in range(n_clusters)}
+        for idx, label in enumerate(cluster_labels):
+            clusters[label].append(idx)
+
+        # Store clusters in a list
+        cluster_list = []
+
+        for i, cluster in clusters.items():
+            # Gather texts in a dictionary format: {rowId: text}
+            cluster_texts = {idx: df["Text"].iloc[idx] for idx in cluster}
+            
+            # Extract keywords from all texts in the cluster
+            keywords = extract_keywords_from_text(list(cluster_texts.values()), top_n=5)
+
+            # Store cluster details
+            cluster_dict = {
+                "cluster_keywords": keywords,
+                "cluster_texts": cluster_texts  # {rowId: text}
+            }
+            
+            # Append to the list
+            cluster_list.append(cluster_dict)
+
+        # Save clusters as a model as a json file
+        cluster_path = os.path.join(app.config["MODELS_FOLDER"], request.args.get("dataset_path")).replace(".xlsx", "_cluster.json")
+        with open(cluster_path, "w", encoding="utf-8") as f:
+            json.dump(cluster_list, f, indent=4, ensure_ascii=False)
+        
+        return jsonify({
+            "message": "Clusters formed successfully",
+            "clusters": cluster_list
+        })
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # Helper Functions
 def encode_dataset(dataset_path):
