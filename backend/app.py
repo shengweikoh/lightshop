@@ -2,48 +2,45 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import pandas as pd
 from werkzeug.utils import secure_filename
+from sentence_transformers import SentenceTransformer, util
 import os
+import io
+import numpy as np
+import spacy
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.metrics import silhouette_score
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import base64
 
 app = Flask(__name__)
 CORS(app)  # Allow frontend access
-UPLOAD_FOLDER = "data"
-MODEL_FOLDER = "models"
 
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["MODEL_FOLDER"] = MODEL_FOLDER
+# Set upload folders
+DATA_FOLDER = os.path.join(os.getcwd(), "data/")
+ENCODED_FOLDER = os.path.join(os.getcwd(), "encoded_data/")
 
-# Ensure folders exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(MODEL_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = DATA_FOLDER
+app.config["ENCODED_FOLDER"] = ENCODED_FOLDER
 
-# Global Variables
-dataset_path = None  # Stores uploaded dataset path
-selected_model = None  # Stores chosen clustering model
-cleaned_df = None  # Stores preprocessed data
+# Ensure directories exist
+os.makedirs(DATA_FOLDER, exist_ok=True)
+os.makedirs(ENCODED_FOLDER, exist_ok=True)
 
-# @app.route("/run-clustering", methods=["POST"])
-# def run_clustering():
-#     """Runs clustering and returns results as JSON."""
-#     data = df.copy()
+# Load Sentence Transformer Model
+model = SentenceTransformer("all-MiniLM-L6-v2")  # Modify model if needed
 
-#     # Perform dimensionality reduction (optional, for visualization)
-#     pca = PCA(n_components=2)
-#     reduced_data = pca.fit_transform(data)
+# Load spaCy's English model
+nlp = spacy.load("en_core_web_sm")
 
-#     # Run KMeans clustering
-#     kmeans = KMeans(n_clusters=5, random_state=42, n_init=10)
-#     clusters = kmeans.fit_predict(reduced_data)
-
-#     # Prepare response
-#     result = pd.DataFrame(reduced_data, columns=["x", "y"])
-#     result["cluster"] = clusters
-
-#     return jsonify(result.to_dict(orient="records"))  # Convert DataFrame to JSON and return
+# Extract spaCy's default stop words list
+spacy_stop_words = nlp.Defaults.stop_words
 
 # Upload Dataset
 @app.route("/upload-dataset", methods=["POST"])
 def upload_dataset():
-    global dataset_path
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     
@@ -57,7 +54,8 @@ def upload_dataset():
 @app.route("/read-dataset", methods=["GET"])
 def read_dataset():
     # Get the dataset path from the request
-    dataset_path = request.args.get("dataset_path")
+    dataset_path = "".join([DATA_FOLDER, request.args.get("dataset_path")])
+    print(dataset_path)
 
     if not dataset_path or not os.path.exists(dataset_path):
         return jsonify({"error": "Invalid or missing file path"}), 400
@@ -71,7 +69,145 @@ def read_dataset():
             "content": df.head().to_dict(orient="records")  # Convert DataFrame to JSON
         })
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Process and Encode Dataset Route
+@app.route("/process-dataset", methods=["POST"])
+def process_dataset():
+    dataset_path = "".join([DATA_FOLDER, request.args.get("dataset_path")])
+    if not dataset_path or not os.path.exists(dataset_path):
+        return jsonify({"error": "Invalid or missing file path"}), 400
+
+    # Encode dataset and save embeddings
+    return encode_dataset(dataset_path)
+
+@app.route("/find-optimal-clusters", methods=["POST"])
+def find_optimal_clusters_hierarchical():
+    encoded_filename = os.path.basename(request.args.get("dataset_path")).replace(".xlsx", "_encoded.npy")
+    encoded_path = os.path.join(app.config["ENCODED_FOLDER"], encoded_filename)
+    if not encoded_path or not os.path.exists(encoded_path):
+        return jsonify({"error": "Invalid or missing file path"}), 400
+    
+    try:
+        embeddings = np.load(encoded_path)
+        base64_img = find_optimal_clusters_hierarchical(embeddings, 50)
+
+        return jsonify({
+            "message": "Optimal clusters found successfully",
+            "plot": base64_img
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+# Helper Functions
+def encode_dataset(dataset_path):
+    try:
+        df = pd.read_excel(dataset_path, engine="openpyxl")
+
+        if "Text" not in df.columns:
+            return jsonify({"error": "Column 'Text' not found in dataset"}), 400
+
+        # Encode the corpus into dense embeddings
+        corpus_embeddings = model.encode(df["Text"].tolist(), convert_to_tensor=False)
+
+        # Save embeddings
+        encoded_filename = os.path.basename(dataset_path).replace(".xlsx", "_encoded.npy")
+        encoded_path = os.path.join(app.config["ENCODED_FOLDER"], encoded_filename)
+        np.save(encoded_path, corpus_embeddings)  # Save as NumPy file
+
+        return jsonify({"message": "Dataset encoded successfully", "encoded_path": encoded_path})
+
+    except Exception as e:
         return jsonify({"error": str(e)}), 500  # Handle file read errors
 
+def preprocess_text_with_spacy(text):
+    """
+    Tokenize, remove stop words using spaCy, and perform lemmatization.
+    Args:
+        text: A single string.
+    Returns:
+        List of processed tokens.
+    """
+    doc = nlp(text)
+    processed_tokens = [
+        token.lemma_.lower() for token in doc if token.is_alpha and token.text.lower() not in spacy_stop_words
+    ]
+    return processed_tokens
+
+def extract_keywords_from_text(texts, top_n=5):
+    """
+    Extract keywords from a list of texts using TF-IDF with spaCy stop word removal and lemmatization.
+    Args:
+        texts: List of strings representing the cluster.
+        top_n: Number of top keywords to extract.
+    Returns:
+        List of top keywords.
+    """
+    # Define the custom TF-IDF Vectorizer with a spaCy-based tokenizer
+    vectorizer = TfidfVectorizer(
+        tokenizer=preprocess_text_with_spacy,
+        stop_words=None,  # Custom stop words are handled in the tokenizer
+        max_features=1000
+    )
+    X = vectorizer.fit_transform(texts)
+    feature_array = vectorizer.get_feature_names_out()
+    tfidf_sorting = X.sum(axis=0).A1.argsort()[::-1]  # Sort features by importance
+
+    top_keywords = [feature_array[i] for i in tfidf_sorting[:top_n]]
+    return top_keywords
+
+def hierarchical_clustering(embeddings, n_clusters):
+    """
+    Perform Hierarchical Clustering on embeddings.
+    Args:
+        embeddings: Array of embeddings (e.g., dense vectors for texts).
+        n_clusters: Number of clusters to form.
+    Returns:
+        List of cluster labels for each data point.
+    """
+    # Convert embeddings to NumPy if necessary
+    if hasattr(embeddings, "cpu"):  # Check if embeddings are tensors
+        embeddings = embeddings.cpu().numpy()
+
+    # Perform Agglomerative Clustering
+    clustering_model = AgglomerativeClustering(n_clusters=n_clusters, metric='euclidean', linkage='ward')
+    cluster_labels = clustering_model.fit_predict(embeddings)
+
+    return cluster_labels
+
+def find_optimal_clusters_hierarchical(embeddings, max_clusters=10):
+    if hasattr(embeddings, "cpu"):  # Check if embeddings are tensors
+        embeddings = embeddings.cpu().numpy()
+
+    silhouette_scores = []
+
+    # Test different numbers of clusters
+    for n_clusters in range(2, max_clusters + 1):
+        clustering = AgglomerativeClustering(n_clusters=n_clusters, metric='euclidean', linkage='ward')
+        cluster_labels = clustering.fit_predict(embeddings)
+        score = silhouette_score(embeddings, cluster_labels)
+        silhouette_scores.append(score)
+
+
+    # Plot the Silhouette Scores
+    plt.figure(figsize=(8, 5))
+    plt.plot(range(2, max_clusters + 1), silhouette_scores, marker='o')
+    plt.xlabel("Number of Clusters")
+    plt.ylabel("Silhouette Score")
+    plt.title("Silhouette Score for Hierarchical Clustering")
+    plt.grid()
+
+    # Save plot as a Base64 image
+    img_buf = io.BytesIO()
+    plt.savefig(img_buf, format="png")
+    img_buf.seek(0)
+    base64_img = base64.b64encode(img_buf.read()).decode("utf-8")
+    plt.close()  # Close plot to free memory
+    return base64_img
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)  # Run on port 5000
+    app.run(debug=True, port=5000)
