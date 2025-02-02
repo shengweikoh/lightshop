@@ -85,7 +85,7 @@ def read_dataset():
 #     # Encode dataset and save embeddings
 #     return encode_dataset(dataset_path)
     
-@app.route("/extract-data", methods=["POST"])
+@app.route("/process-data", methods=["POST"])
 def extract_nlp_data():
     dataset_path = request.json.get("dataset_path")
     if not dataset_path or not os.path.exists(dataset_path):
