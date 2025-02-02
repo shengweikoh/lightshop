@@ -76,14 +76,39 @@ def read_dataset():
 
 
 # Process and Encode Dataset Route
-@app.route("/process-dataset", methods=["POST"])
-def process_dataset():
-    dataset_path = "".join([DATA_FOLDER, request.args.get("dataset_path")])
+# @app.route("/process-dataset", methods=["POST"])
+# def process_dataset():
+#     dataset_path = "".join([DATA_FOLDER, request.args.get("dataset_path")])
+#     if not dataset_path or not os.path.exists(dataset_path):
+#         return jsonify({"error": "Invalid or missing file path"}), 400
+
+#     # Encode dataset and save embeddings
+#     return encode_dataset(dataset_path)
+    
+@app.route("/extract-data", methods=["POST"])
+def extract_nlp_data():
+    dataset_path = request.json.get("dataset_path")
     if not dataset_path or not os.path.exists(dataset_path):
         return jsonify({"error": "Invalid or missing file path"}), 400
+    
+    try:
+        df = pd.read_excel(dataset_path, engine="openpyxl")
 
-    # Encode dataset and save embeddings
-    return encode_dataset(dataset_path)
+        if "Text" not in df.columns:
+            return jsonify({"error": "Column 'Text' not found in dataset"}), 400
+
+        df["entities"] = df["Text"].apply(lambda text: extract_advanced_entities(text)[0])
+        df["relationships"] = df["Text"].apply(extract_advanced_relationships)
+
+        extracted_data = df[["Text", "entities", "relationships"]].to_dict(orient="records")
+
+        return jsonify({
+            "message": "NLP data extracted successfully",
+            "data": extracted_data
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/find-optimal-clusters", methods=["POST"])
 def find_optimal_clusters_hierarchical():
@@ -265,6 +290,72 @@ def find_optimal_clusters_hierarchical(embeddings, max_clusters=10):
     base64_img = base64.b64encode(img_buf.read()).decode("utf-8")
     plt.close()  # Close plot to free memory
     return base64_img
+
+
+def advanced_tokenization(text):
+    """Preprocess and tokenize text, removing unnecessary words."""
+    text = re.sub(r'\s+', ' ', text.lower().strip())
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+
+    doc = nlp(text)
+
+    tokens = [
+        token.lemma_ for token in doc 
+        if not token.is_stop and not token.is_punct and token.is_alpha and len(token.lemma_) > 2
+    ]
+
+    return tokens
+
+def extract_advanced_entities(text):
+    """Extract entities and keep both original & lemmatized versions for better matching."""
+    doc = nlp(text)
+    
+    entity_labels = ['ORG', 'GPE', 'PERSON', 'LAW', 'NORP', 'FAC', 'MONEY', 'EVENT', 'PRODUCT', 'WORK_OF_ART', 'DATE', 'TIME', 'QUANTITY']
+    
+    entities = {
+        ent.text.strip(): ent.label_  
+        for ent in doc.ents 
+        if ent.label_ in entity_labels
+    }
+
+    entity_tokens = set(entities.keys()) | {lemma for e in entities.keys() for lemma in advanced_tokenization(e)}
+
+    return entities, entity_tokens
+
+def extract_advanced_relationships(text):
+    """Extract meaningful relationships while filtering out noise."""
+    doc = nlp(text)
+    relationships = []
+    entities, entity_set = extract_advanced_entities(text)
+
+    for sent in doc.sents:
+        for token in sent:
+            token_lemma = token.lemma_
+
+            # Extract Subject-Verb-Object (SVO)
+            if token.dep_ == 'nsubj' and token.head.pos_ == 'VERB':
+                objects = [child for child in token.head.children if child.dep_ in ['dobj', 'attr', 'pobj']]
+
+                if objects:
+                    source = token.text if token.text in entity_set else token_lemma
+                    target = objects[0].text if objects[0].text in entity_set else objects[0].lemma_
+
+                    prepositional_phrases = [child for child in token.head.children if child.dep_ == 'prep']
+                    extra_info = ""
+
+                    if prepositional_phrases:
+                        prep_text = prepositional_phrases[0].text
+                        prep_objects = [grandchild.text for grandchild in prepositional_phrases[0].children if grandchild.dep_ in ['pobj', 'dobj']]
+                        extra_info = f"{prep_text} {' '.join(prep_objects)}" if prep_objects else prep_text
+
+                    relationships.append({
+                        'source': source,
+                        'relation': token.head.lemma_,
+                        'target': f"{target} {extra_info}".strip(),
+                        'type': 'SVO'
+                    })
+
+    return relationships
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
